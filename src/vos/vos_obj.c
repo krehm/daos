@@ -160,6 +160,7 @@ vos_obj_punch(daos_handle_t coh, daos_unit_oid_t oid, daos_epoch_t epoch,
 {
 	struct vos_container	*cont;
 	struct vos_object	*obj = NULL;
+	daos_epoch_t		 punch_epoch = 0;
 	int			 rc = 0;
 
 	D_DEBUG(DB_IO, "Punch "DF_UOID", epoch "DF_U64"\n",
@@ -182,7 +183,7 @@ vos_obj_punch(daos_handle_t coh, daos_unit_oid_t oid, daos_epoch_t epoch,
 
 	/* NB: punch always generate a new incarnation of the object */
 	rc = vos_obj_hold(vos_obj_cache_current(), vos_hdl2cont(coh), oid,
-			  epoch, false, DAOS_INTENT_PUNCH, &obj);
+			  epoch, &punch_epoch, false, DAOS_INTENT_PUNCH, &obj);
 	if (rc == 0) {
 		if (dkey) /* key punch */
 			rc = key_punch(obj, epoch, pm_ver, dkey,
@@ -216,7 +217,7 @@ vos_obj_delete(daos_handle_t coh, daos_unit_oid_t oid)
 	struct vos_object	*obj;
 	int			 rc;
 
-	rc = vos_obj_hold(occ, cont, oid, DAOS_EPOCH_MAX, true,
+	rc = vos_obj_hold(occ, cont, oid, DAOS_EPOCH_MAX, NULL, true,
 			  DAOS_INTENT_KILL, &obj);
 	if (rc == -DER_NONEXIST)
 		return 0;
@@ -1134,8 +1135,9 @@ int
 vos_obj_iter_prep(vos_iter_type_t type, vos_iter_param_t *param,
 		  struct vos_iterator **iter_pp)
 {
-	struct vos_obj_iter *oiter;
-	int		     rc;
+	struct vos_obj_iter	*oiter;
+	daos_epoch_t		 punch_epoch = 0;
+	int			 rc;
 
 	D_ALLOC_PTR(oiter);
 	if (oiter == NULL)
@@ -1157,8 +1159,9 @@ vos_obj_iter_prep(vos_iter_type_t type, vos_iter_param_t *param,
 	 * system should guarantee this will never happen.
 	 */
 	rc = vos_obj_hold(vos_obj_cache_current(), vos_hdl2cont(param->ip_hdl),
-			  param->ip_oid, param->ip_epr.epr_hi, true,
-			  vos_iter_intent(&oiter->it_iter), &oiter->it_obj);
+			  param->ip_oid, param->ip_epr.epr_hi, &punch_epoch,
+			  true, vos_iter_intent(&oiter->it_iter),
+			  &oiter->it_obj);
 	if (rc != 0)
 		D_GOTO(failed, rc);
 
@@ -1251,14 +1254,15 @@ vos_obj_iter_nested_tree_fetch(struct vos_iterator *iter, vos_iter_type_t type,
 static int
 nested_dkey_iter_init(struct vos_obj_iter *oiter, struct vos_iter_info *info)
 {
-	int	rc;
+	daos_epoch_t	punch_epoch = 0;
+	int		rc;
 
 	/* XXX the condition epoch ranges could cover multiple versions of
 	 * the object/key if it's punched more than once. However, rebuild
 	 * system should guarantee this will never happen.
 	 */
 	rc = vos_obj_hold(vos_obj_cache_current(), vos_hdl2cont(info->ii_hdl),
-			  info->ii_oid, info->ii_epr.epr_hi, true,
+			  info->ii_oid, info->ii_epr.epr_hi, &punch_epoch, true,
 			  vos_iter_intent(&oiter->it_iter), &oiter->it_obj);
 	if (rc != 0)
 		return rc;
@@ -1594,6 +1598,7 @@ vos_oi_set_attr_helper(daos_handle_t coh, daos_unit_oid_t oid,
 	struct umem_instance	*umm;
 	struct vos_object	*obj = NULL;
 	struct vos_container	*cont;
+	daos_epoch_t		 punch_epoch = 0;
 	daos_epoch_range_t	 epr = {epoch, epoch};
 	int			 rc;
 
@@ -1604,7 +1609,7 @@ vos_oi_set_attr_helper(daos_handle_t coh, daos_unit_oid_t oid,
 		goto exit;
 
 	rc = vos_obj_hold(vos_obj_cache_current(), vos_hdl2cont(coh), oid,
-			  epoch, false, DAOS_INTENT_UPDATE, &obj);
+			  epoch, &punch_epoch, false, DAOS_INTENT_UPDATE, &obj);
 	if (rc != 0)
 		goto end;
 
@@ -1677,8 +1682,9 @@ int
 vos_oi_get_attr(daos_handle_t coh, daos_unit_oid_t oid, daos_epoch_t epoch,
 		struct dtx_handle *dth, uint64_t *attr)
 {
-	struct vos_object *obj;
-	int		   rc = 0;
+	struct vos_object	*obj;
+	daos_epoch_t		 punch_epoch = 0;
+	int			 rc = 0;
 
 	D_DEBUG(DB_IO, "Get attributes "DF_UOID", epoch "DF_U64"\n",
 		 DP_UOID(oid), epoch);
@@ -1690,7 +1696,7 @@ vos_oi_get_attr(daos_handle_t coh, daos_unit_oid_t oid, daos_epoch_t epoch,
 
 	vos_dth_set(dth);
 	rc = vos_obj_hold(vos_obj_cache_current(), vos_hdl2cont(coh), oid,
-			  epoch, true, DAOS_INTENT_DEFAULT, &obj);
+			  epoch, &punch_epoch, true, DAOS_INTENT_DEFAULT, &obj);
 	vos_dth_set(NULL);
 	if (rc != 0)
 		return rc;

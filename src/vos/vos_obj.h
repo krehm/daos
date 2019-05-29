@@ -54,18 +54,22 @@ struct vos_object {
 	daos_handle_t			obj_toh;
 	/** btree iterator handle */
 	daos_handle_t			obj_ih;
+	/** Cache of the incarnation log */
+	struct ilog_entries		obj_ilog_cache;
 	/** epoch when the object(cache) is initialized */
 	daos_epoch_t			obj_epoch;
 	/** The latest sync epoch */
 	daos_epoch_t			obj_sync_epoch;
-	/** cached vos_obj_df::vo_incarnation, for revalidation. */
-	uint32_t			obj_incarnation;
-	/** nobody should access this object */
-	bool				obj_zombie;
 	/** Persistent memory address of the object */
 	struct vos_obj_df		*obj_df;
 	/** backref to container */
 	struct vos_container		*obj_cont;
+	/** Object incarnation */
+	uint32_t			obj_incarnation;
+	/** nobody should access this object */
+	bool				obj_zombie;
+	/** intent for ilog_cache */
+	uint32_t			obj_intent;
 };
 
 /**
@@ -73,18 +77,21 @@ struct vos_object {
  * not in cache, this function will load it from PMEM pool or create it, then
  * add it to the cache.
  *
- * \param occ	[IN]	Object cache, it could be a percpu data structure.
- * \param cont	[IN]	Open container.
- * \param oid	[IN]	VOS object ID.
- * \param no_create [IN]
- *			Do not allocate object if it's not there yet.
- * \param intent [IN]	The request intent.
- * \param obj_p [OUT]	Returned object cache reference.
+ * \param occ		[IN]	Object cache, it could be a percpu data structure.
+ * \param cont		[IN]	Open container.
+ * \param oid		[IN]	VOS object ID.
+ * \param epoch		[IN]	Epoch of hold
+ * \param punch_epoch	[OUT]	0 if not punched or highest punch before \p
+ *				epoch
+ * \param no_create	[IN]	Do not allocate object if it's not there yet.
+ * \param intent	[IN]	The request intent.
+ * \param obj_p		[OUT]	Returned object cache reference.
  */
 int
 vos_obj_hold(struct daos_lru_cache *occ, struct vos_container *cont,
 	     daos_unit_oid_t oid, daos_epoch_t epoch,
-	     bool no_create, uint32_t intent, struct vos_object **obj_p);
+	     daos_epoch_t *punch_epoch, bool no_create, uint32_t intent,
+	     struct vos_object **obj_p);
 
 /**
  * Release the object cache reference.
@@ -179,7 +186,6 @@ vos_oi_find_alloc(struct vos_container *cont, daos_unit_oid_t oid,
  *
  * \param cont	[IN]	Open container
  * \param oid	[IN]	DAOS object ID
- * \param intent [IN]	The operation intent
  * \param obj	[OUT]	Direct pointer to VOS object
  *
  * \return		0 on success and negative on
@@ -187,7 +193,7 @@ vos_oi_find_alloc(struct vos_container *cont, daos_unit_oid_t oid,
  */
 int
 vos_oi_find(struct vos_container *cont, daos_unit_oid_t oid,
-	    daos_epoch_t epoch, uint32_t intent, struct vos_obj_df **obj);
+	    struct vos_obj_df **obj);
 
 /**
  * Punch an object from the OI table

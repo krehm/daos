@@ -80,6 +80,10 @@ struct ilog_context {
 	struct umem_instance		 ic_umm;
 	/** ref count for iterator */
 	uint32_t			 ic_ref;
+	/** Log tracks version */
+	bool				 ic_versioned;
+	/** version change needed */
+	bool				 ic_ver_inc;
 	/** In pmdk transaction marker */
 	bool				 ic_in_txn;
 };
@@ -311,6 +315,45 @@ ilog_init(void)
 	return rc;
 }
 
+/** Top two bits are 01.  Remaining bits represent the version */
+#define ILOG_MAGIC		0x40000000
+#define ILOG_VERSIONED		0x20000000
+#define ILOG_MAGIC_MASK		0xc0000000
+#define ILOG_VERSION_MASK	~(ILOG_MAGIC_MASK | ILOG_VERSIONED)
+/** Ensure top two bits match */
+#define ILOG_MAGIC_VALID(magic) (((magic) & ILOG_MAGIC_MASK) == ILOG_MAGIC)
+
+static inline int
+ilog_mag2ver(uint32_t magic) {
+	if (!ILOG_MAGIC_VALID(magic))
+		return -DER_INVAL;
+	return (magic & ILOG_VERSION_MASK);
+}
+
+static inline uint32_t
+ilog_ver_inc(struct ilog_context *lctx)
+{
+	uint32_t	magic = lctx->ic_root->lr_magic;
+	uint32_t	next = (magic & ILOG_VERSION_MASK) + 1;
+
+	D_ASSERT(ILOG_MAGIC_VALID(magic));
+
+	if (!lctx->ic_versioned) {
+		lctx->ic_ver_inc = 0;
+		return ILOG_MAGIC;
+	}
+
+	if (next >= ILOG_VERSIONED)
+		next = 1; /* Wrap around */
+
+	/* This is only called when we will persist the new version so no need
+	 * to update the version when finishing the transaction.
+	 */
+	lctx->ic_ver_inc = 0;
+
+	return ILOG_MAGIC | ILOG_VERSIONED | next;
+}
+
 /** Called when we know a txn is needed.  Subsequent calls are a noop. */
 static inline int
 ilog_tx_begin(struct ilog_context *lctx)
@@ -332,9 +375,28 @@ ilog_tx_begin(struct ilog_context *lctx)
 static inline int
 ilog_tx_end(struct ilog_context *lctx, int rc)
 {
-	if (!lctx->ic_in_txn)
-		return rc;
+	if (!lctx->ic_in_txn) {
+		if (rc != 0 || !lctx->ic_versioned || !lctx->ic_ver_inc)
+			return rc;
+		rc = ilog_tx_begin(lctx);
+		if (rc != 0)
+			return rc;
+	}
 
+	if (rc != 0)
+		goto done;
+
+	if (lctx->ic_ver_inc) {
+		lctx->ic_ver_inc = 0;
+		rc = umem_tx_add_ptr(&lctx->ic_umm, &lctx->ic_root->lr_magic,
+				     sizeof(lctx->ic_root->lr_magic));
+		if (rc != 0) {
+			D_ERROR("Failed to add to undo log\n");
+			goto done;
+		}
+		lctx->ic_root->lr_magic = ilog_ver_inc(lctx);
+	}
+done:
 	lctx->ic_in_txn = false;
 	return vos_tx_end(&lctx->ic_umm, rc);
 }
@@ -345,8 +407,6 @@ ilog_empty(struct ilog_root *root)
 	return !root->lr_tree.it_embedded &&
 		root->lr_tree.it_root == UMOFF_NULL;
 }
-
-#define ILOG_MAGIC 0xdeadbaad
 
 static void
 ilog_addref(struct ilog_context *lctx)
@@ -375,6 +435,8 @@ ilog_ctx_create(struct umem_instance *umm, struct ilog_root *root,
 	(*lctxp)->ic_root = root;
 	(*lctxp)->ic_root_off = umem_ptr2off(umm, root);
 	(*lctxp)->ic_umm = *umm;
+	if (root->lr_magic & ILOG_VERSIONED)
+		(*lctxp)->ic_versioned = true;
 	ilog_addref(*lctxp);
 	return 0;
 }
@@ -399,7 +461,7 @@ ilog_hdl2lctx(daos_handle_t hdl)
 
 	lctx = (struct ilog_context *)hdl.cookie;
 
-	if (lctx->ic_root->lr_magic != ILOG_MAGIC)
+	if (!ILOG_MAGIC_VALID(lctx->ic_root->lr_magic))
 		return NULL;
 
 	return lctx;
@@ -433,18 +495,22 @@ done:
 	ilog_ptr_set_full(lctx, dest, src, sizeof(*(src)))
 
 int
-ilog_create(struct umem_instance *umm, struct ilog_df *root)
+ilog_create(struct umem_instance *umm, struct ilog_df *root, bool versioned)
 {
 	struct ilog_context	lctx = {
 		.ic_root = (struct ilog_root *)root,
 		.ic_umm = *umm,
 		.ic_ref = 0,
+		.ic_versioned = 0,
+		.ic_ver_inc = 0,
 		.ic_in_txn = 0,
 	};
 	struct ilog_root	tmp = {0};
 	int			rc = 0;
 
 	tmp.lr_magic = ILOG_MAGIC;
+	if (versioned)
+		tmp.lr_magic |= ILOG_VERSIONED + 1;
 	rc = ilog_ptr_set(&lctx, root, &tmp);
 
 	rc = ilog_tx_end(&lctx, rc);
@@ -458,7 +524,7 @@ ilog_open(struct umem_instance *umm, struct ilog_df *root,
 	struct ilog_context	*lctx;
 	int			 rc;
 
-	if (((struct ilog_root *)root)->lr_magic != ILOG_MAGIC) {
+	if (!ILOG_MAGIC_VALID(((struct ilog_root *)root)->lr_magic)) {
 		D_ERROR("Could not open uninitialized incarnation log\n");
 		return -DER_INVAL;
 	}
@@ -502,6 +568,8 @@ remove_from_tree(struct ilog_context *lctx, const char *type,
 		D_ERROR("Failure to remove "DF_U64
 			" (%s entry) from ilog: rc=%s\n",
 			id->id_epoch, type, d_errstr(rc));
+	} else {
+		lctx->ic_ver_inc = 1;
 	}
 
 	return rc;
@@ -515,6 +583,7 @@ ilog_destroy(struct umem_instance *umm, struct ilog_df *root)
 		.ic_root_off = umem_ptr2off(umm, root),
 		.ic_umm = *umm,
 		.ic_ref = 1,
+		.ic_ver_inc = 0,
 		.ic_in_txn = 0,
 	};
 	daos_handle_t		 toh = DAOS_HDL_INVAL;
@@ -623,7 +692,7 @@ ilog_root_migrate(struct ilog_context *lctx, daos_epoch_t epoch, bool new_punch)
 
 	tmp.lr_tree.it_root = tree_root;
 	tmp.lr_tree.it_embedded = 0;
-	tmp.lr_magic = ILOG_MAGIC;
+	tmp.lr_magic = ilog_ver_inc(lctx);
 
 	rc = ilog_ptr_set(lctx, root, &tmp);
 done:
@@ -686,6 +755,7 @@ update_inplace(struct ilog_context *lctx, struct ilog_id *id_out,
 	if (opc == ILOG_OP_PERSIST) {
 		D_DEBUG(DB_IO, "Setting "DF_U64" to persistent\n",
 			id_in->id_epoch);
+		lctx->ic_ver_inc = 1;
 		return ilog_ptr_set(lctx, &id_out->id_tx_id, &null_off);
 	}
 
@@ -696,6 +766,7 @@ update_inplace(struct ilog_context *lctx, struct ilog_id *id_out,
 	 * accordingly.
 	 */
 	D_DEBUG(DB_IO, "Updating "DF_U64" to a punch\n", id_in->id_epoch);
+	lctx->ic_ver_inc = 1;
 	return ilog_ptr_set(lctx, punch_out, &punch_in);
 }
 
@@ -754,7 +825,7 @@ set:
 	}
 	*toh = DAOS_HDL_INVAL;
 
-	tmp.lr_magic = ILOG_MAGIC;
+	tmp.lr_magic = ilog_ver_inc(lctx);
 	tmp.lr_id = key;
 	tmp.lr_punch = punch;
 	rc = ilog_ptr_set(lctx, root, &tmp);
@@ -941,6 +1012,8 @@ ilog_tree_modify(struct ilog_context *lctx, const struct ilog_id *id_in,
 		D_ERROR("Failed to update incarnation log: rc = %s\n",
 			d_errstr(rc));
 		goto done;
+	} else {
+		lctx->ic_ver_inc = 1;
 	}
 done:
 	if (!daos_handle_is_inval(ih))
@@ -992,7 +1065,7 @@ ilog_modify(daos_handle_t loh, const struct ilog_id *id_in,
 
 		D_DEBUG(DB_IO, "Inserting "DF_U64" at ilog root\n",
 			id_in->id_epoch);
-		tmp.lr_magic = ILOG_MAGIC;
+		tmp.lr_magic = ilog_ver_inc(lctx);
 		tmp.lr_id.id_epoch = id_in->id_epoch;
 		tmp.lr_punch = punch;
 		rc = ilog_ptr_set(lctx, root, &tmp);
@@ -1016,7 +1089,7 @@ ilog_modify(daos_handle_t loh, const struct ilog_id *id_in,
 			if (opc == ILOG_OP_ABORT) {
 				D_DEBUG(DB_IO, "Removing "DF_U64
 					" from ilog root\n", id_in->id_epoch);
-				tmp.lr_magic = ILOG_MAGIC;
+				tmp.lr_magic = ilog_ver_inc(lctx);
 				rc = ilog_ptr_set(lctx, root, &tmp);
 			}
 			goto done;
@@ -1130,7 +1203,7 @@ ilog_aggregate(daos_handle_t loh, const daos_epoch_range_t *epr)
 		}
 
 		old_id = root->lr_id;
-		tmp.lr_magic = ILOG_MAGIC;
+		tmp.lr_magic = ilog_ver_inc(lctx);
 		rc = ilog_ptr_set(lctx, root, &tmp);
 		if (rc != 0)
 			goto done;
@@ -1449,4 +1522,10 @@ ilog_fetch_finish(struct ilog_entries *entries)
 
 	if (!daos_handle_is_inval(entries->ie_ih))
 		dbtree_iter_finish(entries->ie_ih);
+}
+
+int32_t
+ilog_version(struct ilog_df *ilog)
+{
+	return ilog_mag2ver(((struct ilog_root *)ilog)->lr_magic);
 }

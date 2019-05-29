@@ -170,8 +170,6 @@ struct vos_pool_df {
  * array value that is changed in the transaction (DTX).
  */
 enum vos_dtx_record_types {
-	DTX_RT_OBJ	= 1,
-	DTX_RT_KEY	= 2,
 	DTX_RT_SVT	= 3,
 	DTX_RT_EVT	= 4,
 	DTX_RT_ILOG	= 5,
@@ -370,6 +368,8 @@ struct vos_obj_df {
 	daos_epoch_t			vo_sync;
 	/** Attributes of object.  See vos_oi_attr */
 	uint64_t			vo_oi_attr;
+	/** Incarnation log for object */
+	struct ilog_df			vo_ilog;
 	/** Latest known update timestamp or punched timestamp */
 	daos_epoch_t			vo_latest;
 	/** Earliest known update timestamp */

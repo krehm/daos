@@ -380,7 +380,7 @@ vos_dtx_add_cos(daos_handle_t coh, daos_unit_oid_t *oid, struct dtx_id *dti,
 		 * care about whether it is for punch or update , so
 		 * use DAOS_INTENT_COS to bypass DTX conflict check.
 		 */
-		rc = vos_obj_hold(occ, cont, *oid, epoch, true,
+		rc = vos_obj_hold(occ, cont, *oid, epoch, NULL, true,
 				  DAOS_INTENT_COS, &obj);
 		if (rc != 0)
 			return rc;

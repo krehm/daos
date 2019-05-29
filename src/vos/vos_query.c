@@ -307,6 +307,7 @@ vos_obj_query_key(daos_handle_t coh, daos_unit_oid_t oid, uint32_t flags,
 	daos_anchor_t		 dkey_anchor;
 	daos_anchor_t		 akey_anchor;
 	daos_ofeat_t		 obj_feats;
+	daos_epoch_t		 punch_epoch = 0;
 	int			 rc = 0;
 
 	if ((flags & DAOS_GET_MAX) && (flags & DAOS_GET_MIN)) {
@@ -346,7 +347,7 @@ vos_obj_query_key(daos_handle_t coh, daos_unit_oid_t oid, uint32_t flags,
 	}
 
 	rc = vos_obj_hold(vos_obj_cache_current(), vos_hdl2cont(coh), oid,
-			  epoch, true, DAOS_INTENT_DEFAULT, &obj);
+			  epoch, &punch_epoch, true, DAOS_INTENT_DEFAULT, &obj);
 	if (rc != 0) {
 		LOG_RC(rc, "Could not hold object: %s\n", d_errstr(rc));
 		return rc;

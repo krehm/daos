@@ -83,6 +83,7 @@ obj_lop_alloc(void *key, unsigned int ksize, void *args,
 	obj->obj_id	= lkey->olk_oid;
 	obj->obj_cont	= cont;
 	vos_cont_addref(cont);
+	ilog_fetch_init(&obj->obj_ilog_cache);
 
 	*llink_p = &obj->obj_llink;
 	rc = 0;
@@ -111,6 +112,7 @@ obj_lop_free(struct daos_llink *llink)
 	D_DEBUG(DB_TRACE, "lru free callback for vos_obj_cache\n");
 
 	obj = container_of(llink, struct vos_object, obj_llink);
+	ilog_fetch_finish(&obj->obj_ilog_cache);
 	if (obj->obj_cont != NULL)
 		vos_cont_decref(obj->obj_cont);
 
@@ -192,17 +194,69 @@ vos_obj_release(struct daos_lru_cache *occ, struct vos_object *obj)
 	daos_lru_ref_release(occ, &obj->obj_llink);
 }
 
+static int
+obj_check_existence(struct vos_object *obj, daos_epoch_t epoch,
+		    daos_epoch_t *punch_epoch, uint32_t intent)
+{
+	struct ilog_entry	*entry;
+	daos_epoch_t		 low_epoch = DAOS_EPOCH_MAX;
+	daos_epoch_t		 punch = 0;
+	umem_off_t		 current_tx = vos_dtx_get();
+
+	ilog_foreach_entry_reverse(&obj->obj_ilog_cache, entry) {
+		if (entry->ie_id.id_epoch > epoch)
+			continue;
+
+		if (entry->ie_status & VOS_TX_UNCOMMITTED) {
+			if (current_tx && entry->ie_id.id_tx_id == current_tx)
+				goto check_punch; /* allow same tx to read */
+			if (entry->ie_punch)
+				return -DER_INPROGRESS;
+			/* NB: Save in_progress epoch.  If there are no
+			 * committed epochs, it will return -DER_INPROGRESS
+			 * rather than -DER_NONEXIST to force caller to check
+			 * the leader.  When VOS_IT_PURGE is set, nothing
+			 * should be invisible.
+			 */
+			continue;
+		}
+check_punch:
+		if (entry->ie_punch) {
+			punch = entry->ie_id.id_epoch;
+			break;
+		}
+
+		low_epoch = entry->ie_id.id_epoch;
+
+		if (!punch_epoch)
+			break;
+		/* Continue scan til earliest epoch */
+	}
+
+	if (low_epoch == DAOS_EPOCH_MAX)
+		return -DER_NONEXIST;
+
+	if (punch_epoch && punch)
+		*punch_epoch = punch;
+
+	return 0;
+}
+
 int
 vos_obj_hold(struct daos_lru_cache *occ, struct vos_container *cont,
 	     daos_unit_oid_t oid, daos_epoch_t epoch,
-	     bool no_create, uint32_t intent, struct vos_object **obj_p)
+	     daos_epoch_t *punch_epoch, bool no_create, uint32_t intent,
+	     struct vos_object **obj_p)
 {
 	struct vos_object	*obj;
+	struct daos_llink	*lret;
 	struct obj_lru_key	 lkey;
-	int			 rc;
+	daos_handle_t		 loh = DAOS_HDL_INVAL;
+	int			 rc = 0;
 
 	D_ASSERT(cont != NULL);
 	D_ASSERT(cont->vc_pool);
+
 	if (cont->vc_pool->vp_dying)
 		return -DER_NONEXIST;
 
@@ -213,82 +267,41 @@ vos_obj_hold(struct daos_lru_cache *occ, struct vos_container *cont,
 	lkey.olk_cont = cont;
 	lkey.olk_oid = oid;
 
-	while (1) {
-		struct daos_llink *lret;
+	rc = daos_lru_ref_hold(occ, &lkey, sizeof(lkey), cont, &lret);
+	if (rc)
+		D_GOTO(failed_2, rc);
 
-		rc = daos_lru_ref_hold(occ, &lkey, sizeof(lkey), cont, &lret);
-		if (rc)
-			D_GOTO(failed_2, rc);
+	obj = container_of(lret, struct vos_object, obj_llink);
 
-		obj = container_of(lret, struct vos_object, obj_llink);
-		if (obj->obj_epoch == 0) /* new cache element */
-			obj->obj_epoch = epoch;
+	if (obj->obj_zombie)
+		D_GOTO(failed, rc = -DER_AGAIN);
 
-		if (obj->obj_zombie)
-			D_GOTO(failed, rc = -DER_AGAIN);
+	if (intent == DAOS_INTENT_KILL) {
+		if (vos_obj_refcount(obj) > 2)
+			D_GOTO(failed, rc = -DER_BUSY);
 
-		if (intent == DAOS_INTENT_KILL) {
-			if (vos_obj_refcount(obj) > 2)
-				D_GOTO(failed, rc = -DER_BUSY);
-
-			/* no one else can hold it */
-			obj->obj_zombie = true;
-			vos_obj_evict(obj);
-			if (obj->obj_df)
-				goto out; /* OK to delete */
-		}
-
-		if (!obj->obj_df) /* newly cached object */
-			break;
-
-		if ((!(obj->obj_df->vo_oi_attr & VOS_OI_PUNCHED) ||
-		     obj->obj_df->vo_latest >= epoch) &&
-		    (obj->obj_df->vo_incarnation == obj->obj_incarnation) &&
-		    (obj->obj_epoch <= epoch || obj->obj_incarnation == 0)) {
-			struct umem_instance	*umm = &cont->vc_pool->vp_umm;
-
-			rc = vos_dtx_check_availability(umm, vos_cont2hdl(cont),
-						obj->obj_df->vo_dtx,
-						umem_ptr2off(umm, obj->obj_df),
-						intent, DTX_RT_OBJ);
-			if (rc < 0)
-				D_GOTO(failed, rc);
-
-			if (rc != ALB_UNAVAILABLE) {
-				if (obj->obj_incarnation == 0)
-					obj->obj_epoch = epoch;
-
-				goto out;
-			}
-		}
-
-		D_DEBUG(DB_IO, "Evict obj ["DF_U64" -> "DF_U64"]\n",
-			obj->obj_epoch, epoch);
-
-		/* NB: we don't expect user wants to access many versions
-		 * of the same object at the same time, so just evict the
-		 * unmatched version from the cache, then populate the cache
-		 * with the demanded versoin.
-		 */
+		/* no one else can hold it */
+		obj->obj_zombie = true;
 		vos_obj_evict(obj);
-		vos_obj_release(occ, obj);
+		if (obj->obj_df)
+			goto out; /* Ok to delete */
 	}
+
+	if (obj->obj_df) /* newly cached object */
+		goto check_object;
 
 	D_DEBUG(DB_TRACE, "%s Got empty obj "DF_UOID" in epoch="DF_U64"\n",
 		no_create ? "find" : "find/create", DP_UOID(oid), epoch);
 
 	if (no_create) {
-		rc = vos_oi_find(cont, oid, epoch, intent, &obj->obj_df);
+		rc = vos_oi_find(cont, oid, &obj->obj_df);
 		if (rc == -DER_NONEXIST) {
 			D_DEBUG(DB_TRACE, "non exist oid "DF_UOID"\n",
 				DP_UOID(oid));
-			obj->obj_sync_epoch = 0;
 			rc = 0;
-		} else if (rc == 0) {
-			obj->obj_sync_epoch = obj->obj_df->vo_sync;
 		}
 	} else {
-		rc = vos_oi_find_alloc(cont, oid, epoch, intent, &obj->obj_df);
+		rc = vos_oi_find_alloc(cont, oid, 0, 0, &obj->obj_df);
 		D_ASSERT(rc || obj->obj_df);
 	}
 
@@ -303,13 +316,44 @@ vos_obj_hold(struct daos_lru_cache *occ, struct vos_container *cont,
 		}
 		goto out;
 	}
+check_object:
+	if (no_create == false || intent == DAOS_INTENT_KILL)
+		goto out;
 
-	D_ASSERTF((obj->obj_df->vo_oi_attr & VOS_OI_PUNCHED) == 0 ||
-		  epoch <= obj->obj_df->vo_latest,
-		  "e="DF_U64", p="DF_U64"\n", epoch,
-		  obj->obj_df->vo_latest);
+	if (no_create) {
+		uint32_t version = ilog_version(&obj->obj_df->vo_ilog);
 
-	obj->obj_incarnation = obj->obj_df->vo_incarnation;
+		if (obj->obj_incarnation == version)
+			goto check_existence;
+
+		rc = ilog_open(vos_cont2umm(cont), &obj->obj_df->vo_ilog, &loh);
+		if (rc != 0) {
+			D_ERROR("Failed to open incarnation log for object: "
+				DF_RC "\n", DP_RC(rc));
+			D_GOTO(failed, rc);
+		}
+		obj->obj_incarnation = ilog_version(&obj->obj_df->vo_ilog);
+		rc = ilog_fetch(loh, NULL, &obj->obj_ilog_cache);
+		ilog_close(loh);
+		if (rc != 0) {
+			D_ERROR("Failed to fetch incarnation log for object: "
+				DF_RC "\n", DP_RC(rc));
+			D_GOTO(failed, rc);
+		}
+		loh = DAOS_HDL_INVAL;
+	}
+
+check_existence:
+	rc = obj_check_existence(obj, epoch, punch_epoch, intent);
+	if (rc == -DER_NONEXIST) {
+		rc = 0;
+	}
+	if (rc != 0) {
+		D_CDEBUG(rc == -DER_INPROGRESS, DB_TRACE, DLOG_ERR,
+			 "Object doesn't "DF_UOID" not found at epoch "DF_U64
+			 ": "DF_RC"\n", DP_UOID(oid), epoch, DP_RC(rc));
+		goto failed;
+	}
 out:
 	if (obj->obj_df != NULL && epoch <= obj->obj_sync_epoch &&
 	    (intent == DAOS_INTENT_COS || (vos_dth_get() != NULL &&

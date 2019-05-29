@@ -422,12 +422,13 @@ ilog_test_update(void **state)
 
 	ilog = ilog_alloc_root(umm);
 
-	rc = ilog_create(umm, ilog);
+	rc = ilog_create(umm, ilog, true);
 	if (rc != 0) {
 		print_message("Failed to create a new incarnation log: %s\n",
 			      d_errstr(rc));
 		assert(0);
 	}
+	assert_int_equal(ilog_version(ilog), 1);
 
 	rc = ilog_open(umm, ilog, &loh);
 	if (rc != 0) {
@@ -443,6 +444,7 @@ ilog_test_update(void **state)
 		print_message("Failed to insert log entry: %s\n", d_errstr(rc));
 		assert(0);
 	}
+	assert_int_equal(ilog_version(ilog), 2);
 
 	rc = entries_set(entries, ENTRY_NEW, 1, false, ENTRIES_END);
 	assert_int_equal(rc, 0);
@@ -456,6 +458,7 @@ ilog_test_update(void **state)
 		assert(0);
 	}
 
+	assert_int_equal(ilog_version(ilog), 3);
 	rc = entries_set(entries, ENTRY_REPLACE, 1, true, ENTRIES_END);
 	assert_int_equal(rc, 0);
 	rc = entries_check(loh, NULL, 0, entries);
@@ -470,6 +473,7 @@ ilog_test_update(void **state)
 			      d_errstr(rc));
 		assert(0);
 	}
+	assert_int_equal(ilog_version(ilog), 3);
 
 	/** no change */
 	rc = entries_check(loh, NULL, 0, entries);
@@ -482,6 +486,7 @@ ilog_test_update(void **state)
 		print_message("Failed to insert log entry: %s\n", d_errstr(rc));
 		assert(0);
 	}
+	assert_int_equal(ilog_version(ilog), 4);
 
 	rc = entries_set(entries, ENTRY_APPEND, 2, false, ENTRIES_END);
 	assert_int_equal(rc, 0);
@@ -494,6 +499,7 @@ ilog_test_update(void **state)
 		print_message("Failed to insert log entry: %s\n", d_errstr(rc));
 		assert(0);
 	}
+	assert_int_equal(ilog_version(ilog), 5);
 
 	rc = entries_set(entries, ENTRY_REPLACE, 2, true, ENTRIES_END);
 	assert_int_equal(rc, 0);
@@ -532,6 +538,7 @@ ilog_test_update(void **state)
 	ilog_close(loh);
 	rc = ilog_destroy(umm, ilog);
 	assert_int_equal(rc, 0);
+	assert_int_equal(ilog_version(ilog), -DER_INVAL);
 
 	assert_true(d_list_empty(&fake_tx_list));
 
@@ -564,12 +571,14 @@ ilog_test_abort(void **state)
 
 	ilog = ilog_alloc_root(umm);
 
-	rc = ilog_create(umm, ilog);
+	rc = ilog_create(umm, ilog, false);
 	if (rc != 0) {
 		print_message("Failed to create a new incarnation log: %s\n",
 			      d_errstr(rc));
 		assert(0);
 	}
+
+	assert_int_equal(ilog_version(ilog), 0);
 
 	rc = ilog_open(umm, ilog, &loh);
 	if (rc != 0) {
@@ -667,8 +676,10 @@ ilog_test_abort(void **state)
 	assert_int_equal(rc, 0);
 
 	ilog_close(loh);
+	assert_int_equal(ilog_version(ilog), 0);
 	rc = ilog_destroy(umm, ilog);
 	assert_int_equal(rc, 0);
+	assert_int_equal(ilog_version(ilog), -DER_INVAL);
 
 	assert_true(d_list_empty(&fake_tx_list));
 	ilog_free_root(umm, ilog);
@@ -694,12 +705,13 @@ ilog_test_persist(void **state)
 
 	ilog = ilog_alloc_root(umm);
 
-	rc = ilog_create(umm, ilog);
+	rc = ilog_create(umm, ilog, false);
 	if (rc != 0) {
 		print_message("Failed to create a new incarnation log: %s\n",
 			      d_errstr(rc));
 		assert(0);
 	}
+	assert_int_equal(ilog_version(ilog), 0);
 
 	rc = ilog_open(umm, ilog, &loh);
 	if (rc != 0) {
@@ -748,6 +760,7 @@ ilog_test_persist(void **state)
 	}
 	current_tx_id = saved_tx_id2;
 	fake_tx_remove();
+	assert_int_equal(ilog_version(ilog), 0);
 
 	rc = entries_set(entries, ENTRY_NEW, 1, false, 2, false, 4, true,
 			 ENTRIES_END);
@@ -771,8 +784,10 @@ ilog_test_persist(void **state)
 	assert_int_equal(rc, 0);
 
 	ilog_close(loh);
+	assert_int_equal(ilog_version(ilog), 0);
 	rc = ilog_destroy(umm, ilog);
 	assert_int_equal(rc, 0);
+	assert_int_equal(ilog_version(ilog), -DER_INVAL);
 	assert_true(d_list_empty(&fake_tx_list));
 	ilog_free_root(umm, ilog);
 }
@@ -797,12 +812,14 @@ ilog_test_aggregate(void **state)
 
 	ilog = ilog_alloc_root(umm);
 
-	rc = ilog_create(umm, ilog);
+	rc = ilog_create(umm, ilog, false);
 	if (rc != 0) {
 		print_message("Failed to create a new incarnation log: %s\n",
 			      d_errstr(rc));
 		assert(0);
 	}
+
+	assert_int_equal(ilog_version(ilog), 0);
 
 	rc = ilog_open(umm, ilog, &loh);
 	if (rc != 0) {
@@ -904,8 +921,10 @@ ilog_test_aggregate(void **state)
 	assert_true(d_list_empty(&fake_tx_list));
 
 	ilog_close(loh);
+	assert_int_equal(ilog_version(ilog), 0);
 	rc = ilog_destroy(umm, ilog);
 	assert_int_equal(rc, 0);
+	assert_int_equal(ilog_version(ilog), -DER_INVAL);
 
 	ilog_free_root(umm, ilog);
 }

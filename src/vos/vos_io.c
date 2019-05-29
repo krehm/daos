@@ -771,8 +771,9 @@ vos_fetch_begin(daos_handle_t coh, daos_unit_oid_t oid, daos_epoch_t epoch,
 		daos_key_t *dkey, unsigned int iod_nr, daos_iod_t *iods,
 		bool size_fetch, daos_handle_t *ioh)
 {
-	struct vos_io_context *ioc;
-	int i, rc;
+	struct vos_io_context	*ioc;
+	daos_epoch_t		 punch_epoch = 0;
+	int			 i, rc;
 
 	rc = vos_ioc_create(coh, oid, true, epoch, iod_nr, iods, size_fetch,
 			    &ioc);
@@ -780,7 +781,8 @@ vos_fetch_begin(daos_handle_t coh, daos_unit_oid_t oid, daos_epoch_t epoch,
 		return rc;
 
 	rc = vos_obj_hold(vos_obj_cache_current(), ioc->ic_cont, oid, epoch,
-			  true, DAOS_INTENT_DEFAULT, &ioc->ic_obj);
+			  &punch_epoch, true, DAOS_INTENT_DEFAULT,
+			  &ioc->ic_obj);
 	if (rc != 0)
 		goto error;
 
@@ -1423,8 +1425,8 @@ vos_update_end(daos_handle_t ioh, uint32_t pm_ver, daos_key_t *dkey, int err,
 	vos_dth_set(dth);
 
 	err = vos_obj_hold(vos_obj_cache_current(), ioc->ic_cont, ioc->ic_oid,
-			   ioc->ic_epoch, false, DAOS_INTENT_UPDATE,
-			   &ioc->ic_obj);
+			   ioc->ic_epoch, NULL, false,
+			   DAOS_INTENT_UPDATE, &ioc->ic_obj);
 	if (err != 0)
 		goto abort;
 

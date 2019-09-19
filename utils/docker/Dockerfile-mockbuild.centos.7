@@ -32,8 +32,8 @@ RUN echo "config_opts['use_nspawn'] = False" >> /etc/mock/site-defaults.cfg
 ARG JENKINS_URL=""
 
 RUN echo -e "config_opts['yum.conf'] += \"\"\"\n" >> /etc/mock/default.cfg;  \
-    for repo in openpa libfabric pmix ompi mercury spdk isa-l fio dpdk       \
-                protobuf-c fuse pmdk argobots raft cart@daos_devel1; do      \
+    for repo in openpa libpsm2@PR-1 libfabric@PR-16 pmix ompi mercury spdk isa-l fio dpdk       \
+                protobuf-c fuse pmdk argobots raft cart@PR-216; do      \
         if [[ $repo = *@* ]]; then                                           \
             branch="${repo#*@}";                                             \
             repo="${repo%@*}";                                               \

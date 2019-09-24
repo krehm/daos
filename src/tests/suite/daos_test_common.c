@@ -28,6 +28,7 @@
 #define D_LOGFAC	DD_FAC(tests)
 
 #include <daos.h>
+#include <daos_mgmt.h>
 #include "daos_test.h"
 
 /** Server crt group ID */
@@ -675,6 +676,7 @@ run_daos_sub_tests(const struct CMUnitTest *tests, int tests_size,
 		}
 
 		print_message("%s\n", tests[idx].name);
+		daos_mgmt_add_mark(tests[idx].name);
 		if (tests[idx].setup_func)
 			tests[idx].setup_func(&state);
 

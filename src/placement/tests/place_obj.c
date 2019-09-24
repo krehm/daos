@@ -905,7 +905,7 @@ benchmark_add_data_movement(int argc, char **argv, uint32_t num_domains,
 	benchmark_graph((double *)percent_moved, map_keys, num_map_types,
 			domains_to_add + 1, "Number of added racks",
 			"% Data Moved", 1.0,
-			"Data movement \% when adding racks", "/tmp/gnufifo",
+			"Data movement %% when adding racks", "/tmp/gnufifo",
 			use_x11);
 }
 

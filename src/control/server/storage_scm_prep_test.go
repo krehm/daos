@@ -28,23 +28,24 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pkg/errors"
+
 	. "github.com/daos-stack/daos/src/control/common"
 	. "github.com/daos-stack/daos/src/control/common/storage"
-	. "github.com/daos-stack/daos/src/control/lib/ipmctl"
 	"github.com/daos-stack/daos/src/control/logging"
-	"github.com/pkg/errors"
+	"github.com/daos-stack/daos/src/control/server/storage/scm"
 )
 
 // MockPmemDevice returns a mock pmem device file.
-func MockPmemDevice() pmemDev {
+func MockPmemDevice() scm.Namespace {
 	pmdPB := MockPmemDevicePB()
 
-	return pmemDev{pmdPB.Uuid, pmdPB.Blockdev, pmdPB.Dev, int(pmdPB.Numanode)}
+	return scm.Namespace{pmdPB.Uuid, pmdPB.Blockdev, pmdPB.Dev, pmdPB.Numanode}
 }
 
 // mock implementation of PrepScm interface for external testing
 type mockPrepScm struct {
-	pmemDevs         []pmemDev
+	pmemDevs         []scm.Namespace
 	prepNeedsReboot  bool
 	resetNeedsReboot bool
 	prepRet          error
@@ -54,7 +55,7 @@ type mockPrepScm struct {
 	getNamespacesRet error
 }
 
-func (mp *mockPrepScm) Prep(ScmState) (bool, []pmemDev, error) {
+func (mp *mockPrepScm) Prep(ScmState) (bool, []scm.Namespace, error) {
 	return mp.prepNeedsReboot, mp.pmemDevs, mp.prepRet
 }
 func (mp *mockPrepScm) PrepReset(ScmState) (bool, error) {
@@ -63,7 +64,7 @@ func (mp *mockPrepScm) PrepReset(ScmState) (bool, error) {
 func (mp *mockPrepScm) GetState() (ScmState, error) {
 	return mp.currentState, mp.getStateRet
 }
-func (mp *mockPrepScm) GetNamespaces() ([]pmemDev, error) {
+func (mp *mockPrepScm) GetNamespaces() ([]scm.Namespace, error) {
 	return mp.pmemDevs, mp.getNamespacesRet
 }
 
@@ -121,7 +122,7 @@ func TestGetState(t *testing.T) {
 		errMsg            string
 		showRegionOut     string
 		expRebootRequired bool
-		expPmemDevs       []pmemDev
+		expPmemDevs       []scm.Namespace
 		expCommands       []string
 		lookPathErrMsg    string
 	}{
@@ -175,7 +176,7 @@ func TestGetState(t *testing.T) {
 		},
 		{
 			desc:           "ndctl not installed",
-			lookPathErrMsg: msgNdctlNotFound,
+			lookPathErrMsg: scm.FaultMissingNdctl.Error(),
 		},
 	}
 
@@ -193,8 +194,8 @@ func TestGetState(t *testing.T) {
 
 			// not using mockPrepScm because we want to exercise
 			// prepScm
-			ss := newMockScmStorage(log, defaultMockExt(), nil, []DeviceDiscovery{MockModule()},
-				false, newPrepScm(log, mockRun, mockLookPath))
+			ss := newMockScmStorage(log, defaultMockExt(), nil, []scm.Module{MockModule()},
+				false, newPrepScm(log, mockRun, mockLookPath), nil)
 
 			if err := ss.Discover(); err != nil {
 				// if GetNamespaces fails, init should still be set
@@ -219,7 +220,7 @@ func TestGetState(t *testing.T) {
 				t.Fatal(tt.desc + ": GetState: " + err.Error())
 			}
 
-			needsReboot, pmemDevs, err := ss.Prep(scmState)
+			needsReboot, namespaces, err := ss.Prep(scmState)
 			if tt.errMsg != "" {
 				ExpectError(t, err, tt.errMsg, tt.desc)
 				return
@@ -230,7 +231,7 @@ func TestGetState(t *testing.T) {
 
 			AssertEqual(t, commands, tt.expCommands, tt.desc+": unexpected list of commands run")
 			AssertEqual(t, needsReboot, tt.expRebootRequired, tt.desc+": unexpected value for is reboot required")
-			AssertEqual(t, pmemDevs, tt.expPmemDevs, tt.desc+": unexpected list of pmem device file names")
+			AssertEqual(t, namespaces, tt.expPmemDevs, tt.desc+": unexpected list of pmem device file names")
 		})
 	}
 }
@@ -260,32 +261,32 @@ func TestGetNamespaces(t *testing.T) {
 		desc           string
 		errMsg         string
 		cmdOut         string
-		expPmemDevs    []pmemDev
+		expPmemDevs    []scm.Namespace
 		expCommands    []string
 		lookPathErrMsg string
 	}{
 		{
 			desc:        "no namespaces",
 			cmdOut:      "",
-			expCommands: []string{cmdScmListNamespaces, cmdScmListNamespaces},
-			expPmemDevs: []pmemDev{},
+			expCommands: []string{cmdScmListNamespaces},
+			expPmemDevs: []scm.Namespace{},
 		},
 		{
 			desc:        "single pmem device",
 			cmdOut:      fmt.Sprintf(pmemOut, 1, 1, 0),
-			expCommands: []string{cmdScmListNamespaces, cmdScmListNamespaces},
+			expCommands: []string{cmdScmListNamespaces},
 			expPmemDevs: onePmem,
 		},
 		{
 			desc:        "two pmem device",
 			cmdOut:      twoPmemsJson,
-			expCommands: []string{cmdScmListNamespaces, cmdScmListNamespaces},
+			expCommands: []string{cmdScmListNamespaces},
 			expPmemDevs: twoPmems,
 		},
 		{
 			desc:           "ndctl not installed",
-			lookPathErrMsg: msgNdctlNotFound,
-			errMsg:         msgNdctlNotFound,
+			lookPathErrMsg: scm.FaultMissingNdctl.Error(),
+			errMsg:         scm.FaultMissingNdctl.Error(),
 		},
 	}
 
@@ -310,8 +311,8 @@ func TestGetNamespaces(t *testing.T) {
 
 			// not using mockPrepScm because we want to exercise
 			// prepScm
-			ss := newMockScmStorage(log, defaultMockExt(), nil, []DeviceDiscovery{MockModule()},
-				false, newPrepScm(log, mockRun, mockLookPath))
+			ss := newMockScmStorage(log, defaultMockExt(), nil, []scm.Module{MockModule()},
+				false, newPrepScm(log, mockRun, mockLookPath), nil)
 
 			AssertEqual(t, ss.initialized, false, tt.desc+": expected SCM to start un-initialized")
 
@@ -324,7 +325,7 @@ func TestGetNamespaces(t *testing.T) {
 				}
 			}
 
-			pmemDevs, err := ss.prep.GetNamespaces()
+			namespaces, err := ss.prep.GetNamespaces()
 			if err != nil {
 				if tt.lookPathErrMsg != "" {
 					ExpectError(t, err, tt.lookPathErrMsg, tt.desc)
@@ -334,7 +335,7 @@ func TestGetNamespaces(t *testing.T) {
 			}
 
 			AssertEqual(t, commands, tt.expCommands, tt.desc+": unexpected list of commands run")
-			AssertEqual(t, pmemDevs, tt.expPmemDevs, tt.desc+": unexpected list of pmem device file names")
+			AssertEqual(t, namespaces, tt.expPmemDevs, tt.desc+": unexpected list of pmem device file names")
 		})
 	}
 }

@@ -37,6 +37,7 @@ import (
 	"github.com/daos-stack/daos/src/control/logging"
 	"github.com/daos-stack/daos/src/control/server/ioserver"
 	"github.com/daos-stack/daos/src/control/server/storage"
+	"github.com/daos-stack/daos/src/control/server/storage/scm"
 )
 
 // IOServerInstance encapsulates control-plane specific configuration
@@ -49,10 +50,10 @@ import (
 type IOServerInstance struct {
 	Index int
 
-	ext           External
 	log           logging.Logger
 	runner        *ioserver.Runner
 	bdevProvider  *storage.BdevProvider
+	scmProvider   *scm.Provider
 	drpcClient    drpc.DomainSocketClient
 	msClient      *mgmtSvcClient
 	instanceReady chan *srvpb.NotifyReadyReq
@@ -68,15 +69,16 @@ type IOServerInstance struct {
 
 // NewIOServerInstance returns an *IOServerInstance initialized with
 // its dependencies.
-func NewIOServerInstance(ext External, log logging.Logger,
-	bp *storage.BdevProvider, msc *mgmtSvcClient, r *ioserver.Runner) *IOServerInstance {
+func NewIOServerInstance(log logging.Logger,
+	bp *storage.BdevProvider, sp *scm.Provider,
+	msc *mgmtSvcClient, r *ioserver.Runner) *IOServerInstance {
 
 	return &IOServerInstance{
 		Index:         r.Config.Index,
-		ext:           ext,
 		log:           log,
 		runner:        r,
 		bdevProvider:  bp,
+		scmProvider:   sp,
 		msClient:      msc,
 		drpcClient:    getDrpcClientConnection(r.Config.SocketDir),
 		instanceReady: make(chan *srvpb.NotifyReadyReq),
@@ -117,25 +119,33 @@ func (srv *IOServerInstance) MountScmDevice() error {
 		return err
 	}
 
-	isMount, err := srv.ext.isMountPoint(scmCfg.MountPoint)
+	isMount, err := srv.scmProvider.IsMounted(scmCfg.MountPoint)
 	if err != nil && !os.IsNotExist(errors.Cause(err)) {
 		return errors.WithMessage(err, "failed to check SCM mount")
 	}
 	if isMount {
-		srv.log.Debugf("%s already mounted", scmCfg.MountPoint)
 		return nil
 	}
 
 	srv.log.Debugf("attempting to mount existing SCM dir %s\n", scmCfg.MountPoint)
-	mntType, devPath, mntOpts, err := getMntParams(scmCfg)
-	if err != nil {
-		return errors.WithMessage(err, "getting scm mount params")
-	}
 
-	srv.log.Debugf("mounting scm %s at %s (%s)...", devPath, scmCfg.MountPoint, mntType)
-	if err := srv.ext.mount(devPath, scmCfg.MountPoint, mntType, uintptr(0), mntOpts); err != nil {
+	var res *scm.MountResponse
+	switch scmCfg.Class {
+	case storage.ScmClassRAM:
+		res, err = srv.scmProvider.MountRamdisk(scmCfg.MountPoint, uint(scmCfg.RamdiskSize))
+	case storage.ScmClassDCPM:
+		if len(scmCfg.DeviceList) != 1 {
+			err = scm.FaultFormatInvalidDeviceCount
+			break
+		}
+		res, err = srv.scmProvider.MountDcpm(scmCfg.DeviceList[0], scmCfg.MountPoint)
+	default:
+		err = errors.New(msgScmClassNotSupported)
+	}
+	if err != nil {
 		return errors.WithMessage(err, "mounting existing scm dir")
 	}
+	srv.log.Debugf("%s mounted: %t", res.Target, res.Mounted)
 
 	return nil
 }
@@ -166,7 +176,7 @@ func (srv *IOServerInstance) NeedsScmFormat() (bool, error) {
 	// existing methods.
 
 	// First, check to see if the mount point even exists.
-	isMounted, err := srv.ext.isMountPoint(scmCfg.MountPoint)
+	isMounted, err := srv.scmProvider.IsMounted(scmCfg.MountPoint)
 	if err != nil {
 		// In theory, the only possible error is ENOENT. In practice,
 		// test that assumption and return an error if we get something else.
@@ -192,15 +202,20 @@ func (srv *IOServerInstance) NeedsScmFormat() (bool, error) {
 		return true, nil
 	}
 
-	// Next, try to mount the SCM device. If that succeeds, then we shouldn't
-	// try to format it.
-	if err := srv.MountScmDevice(); err == nil {
-		srv._scmStorageOk = true
+	res, err := srv.scmProvider.CheckFormat(scm.FormatRequest{
+		Dcpm: &scm.DcpmParams{
+			Devices: scmCfg.DeviceList,
+		},
+	})
+	if err != nil {
+		return false, errors.Wrap(err, "failed to check DCPM storage formatting")
+	}
+	if res.Formatted {
 		return false, nil
 	}
 
 	// At this point we can be pretty sure that the device needs to be formatted.
-	srv.log.Debugf("%s: needs format (mount failed)", scmCfg.MountPoint)
+	srv.log.Debugf("%s: needs format (probed unformatted)", scmCfg.MountPoint)
 	return true, nil
 }
 

@@ -20,8 +20,7 @@
 // Any reproduction of computer software, computer software documentation, or
 // portions thereof marked with this legend must also reproduce the markings.
 //
-
-package server
+package scm
 
 import (
 	"encoding/json"
@@ -29,10 +28,11 @@ import (
 	"os/exec"
 	"strings"
 
-	types "github.com/daos-stack/daos/src/control/common/storage"
-	"github.com/daos-stack/daos/src/control/logging"
-	"github.com/daos-stack/daos/src/control/server/storage/scm"
 	"github.com/pkg/errors"
+
+	types "github.com/daos-stack/daos/src/control/common/storage"
+	"github.com/daos-stack/daos/src/control/lib/ipmctl"
+	"github.com/daos-stack/daos/src/control/logging"
 )
 
 const (
@@ -48,15 +48,10 @@ const (
 	cmdScmDestroyNamespace = "ndctl destroy-namespace %s"
 )
 
-type pmemDev struct {
-	UUID     string
-	Blockdev string
-	Dev      string
-	NumaNode int `json:"numa_node"`
-}
-
-func (pd *pmemDev) String() string {
-	return fmt.Sprintf("%s, numa %d", pd.Blockdev, pd.NumaNode)
+type ipmCtlRunner struct {
+	log     logging.Logger
+	binding ipmctl.IpmCtl
+	runCmd  runCmdFn
 }
 
 type runCmdFn func(string) (string, error)
@@ -75,7 +70,7 @@ func (rce *runCmdError) Error() string {
 	return fmt.Sprintf("%s: stdout: %s", rce.wrapped.Error(), rce.stdout)
 }
 
-// run wraps exec.Command().Output() to enable mocking of command output.
+// run wrar exec.Command().Output() to enable mocking of command output.
 func run(cmd string) (string, error) {
 	out, err := exec.Command("bash", "-c", cmd).Output()
 	if err != nil {
@@ -88,49 +83,37 @@ func run(cmd string) (string, error) {
 	return string(out), nil
 }
 
-type lookPathFn func(string) (string, error)
-
-// PrepScm interface provides capability to prepare SCM storage
-type PrepScm interface {
-	GetNamespaces() ([]scm.Namespace, error)
-	GetState() (types.ScmState, error)
-	Prep(types.ScmState) (bool, []scm.Namespace, error)
-	PrepReset(types.ScmState) (bool, error)
-}
-
-type prepScm struct {
-	log      logging.Logger
-	runCmd   runCmdFn
-	lookPath lookPathFn
-}
-
-func newPrepScm(log logging.Logger, myRun runCmdFn, myLookPath lookPathFn) PrepScm {
-	return &prepScm{log: log, runCmd: myRun, lookPath: myLookPath}
-}
-
-// checkNdctl verifies ndctl application is installed.
-func (ps *prepScm) checkNdctl() error {
-	_, err := ps.lookPath("ndctl")
+func (r *ipmCtlRunner) Discover() ([]Module, error) {
+	discovery, err := r.binding.Discover()
 	if err != nil {
-		return scm.FaultMissingNdctl
+		return nil, errors.Wrap(err, "failed to discover SCM modules")
+	}
+	r.log.Debugf("discovered %d DCPM modules", len(discovery))
+
+	modules := make([]Module, 0, len(discovery))
+	for _, d := range discovery {
+		modules = append(modules, Module{
+			ChannelID:       uint32(d.Channel_id),
+			ChannelPosition: uint32(d.Channel_pos),
+			ControllerID:    uint32(d.Memory_controller_id),
+			SocketID:        uint32(d.Socket_id),
+			PhysicalID:      uint32(d.Physical_id),
+			Capacity:        d.Capacity,
+		})
 	}
 
-	return nil
+	return modules, nil
 }
 
-// GetState establishes state of SCM regions and namespaces on local server.
-func (ps *prepScm) GetState() (types.ScmState, error) {
-	if err := ps.checkNdctl(); err != nil {
-		return types.ScmStateUnknown, err
-	}
-
+// getState establishes state of SCM regions and namespaces on local server.
+func (r *ipmCtlRunner) GetState() (types.ScmState, error) {
 	// TODO: discovery should provide SCM region details
-	out, err := ps.runCmd(cmdScmShowRegions)
+	out, err := r.runCmd(cmdScmShowRegions)
 	if err != nil {
 		return types.ScmStateUnknown, err
 	}
 
-	ps.log.Debugf("show region output: %s\n", out)
+	r.log.Debugf("show region output: %s\n", out)
 
 	if out == outScmNoRegions {
 		return types.ScmStateNoRegions, nil
@@ -159,28 +142,26 @@ func (ps *prepScm) GetState() (types.ScmState, error) {
 // * regions exist but no free capacity -> no-op, return namespaces
 //
 // Command output from external tools will be returned. State will be passed in.
-func (ps *prepScm) Prep(state types.ScmState) (needsReboot bool, pmemDevs []scm.Namespace, err error) {
-	if err = ps.checkNdctl(); err != nil {
-		return
-	}
+func (r *ipmCtlRunner) Prep(state types.ScmState) (needsReboot bool, pmemDevs []Namespace,
+	err error) {
 
-	ps.log.Debugf("scm in state %s\n", state)
+	r.log.Debugf("scm in state %s\n", state)
 
 	switch state {
 	case types.ScmStateNoRegions:
 		// clear any pre-existing goals first
-		if _, err = ps.runCmd(cmdScmDeleteGoal); err != nil {
+		if _, err = r.runCmd(cmdScmDeleteGoal); err != nil {
 			err = errors.WithMessage(err, "clear goal")
 			return
 		}
 		// if successful, memory allocation change read on reboot
-		if _, err = ps.runCmd(cmdScmCreateRegions); err == nil {
+		if _, err = r.runCmd(cmdScmCreateRegions); err == nil {
 			needsReboot = true
 		}
 	case types.ScmStateFreeCapacity:
-		pmemDevs, err = ps.createNamespaces()
+		pmemDevs, err = r.createNamespaces()
 	case types.ScmStateNoCapacity:
-		pmemDevs, err = ps.GetNamespaces()
+		pmemDevs, err = r.GetNamespaces()
 	case types.ScmStateUnknown:
 		err = errors.New("unknown scm state")
 	default:
@@ -194,16 +175,12 @@ func (ps *prepScm) Prep(state types.ScmState) (needsReboot bool, pmemDevs []scm.
 //
 // Returns indication of whether a reboot is required alongside error.
 // Command output from external tools will be returned. State will be passed in.
-func (ps *prepScm) PrepReset(state types.ScmState) (bool, error) {
-	if err := ps.checkNdctl(); err != nil {
-		return false, nil
-	}
-
-	ps.log.Debugf("scm in state %s\n", state)
+func (r *ipmCtlRunner) PrepReset(state types.ScmState) (bool, error) {
+	r.log.Debugf("scm in state %s\n", state)
 
 	switch state {
 	case types.ScmStateNoRegions:
-		ps.log.Info("SCM is already reset\n")
+		r.log.Info("SCM is already reset\n")
 		return false, nil
 	case types.ScmStateFreeCapacity, types.ScmStateNoCapacity:
 	case types.ScmStateUnknown:
@@ -212,39 +189,39 @@ func (ps *prepScm) PrepReset(state types.ScmState) (bool, error) {
 		return false, errors.Errorf("unhandled scm state %q", state)
 	}
 
-	pmemDevs, err := ps.GetNamespaces()
+	namespaces, err := r.GetNamespaces()
 	if err != nil {
 		return false, err
 	}
 
-	for _, dev := range pmemDevs {
-		if err := ps.removeNamespace(dev.Name); err != nil {
+	for _, dev := range namespaces {
+		if err := r.removeNamespace(dev.Name); err != nil {
 			return false, err
 		}
 	}
 
-	ps.log.Infof("resetting SCM memory allocations\n")
+	r.log.Infof("resetting SCM memory allocations\n")
 	// clear any pre-existing goals first
-	if _, err := ps.runCmd(cmdScmDeleteGoal); err != nil {
+	if _, err := r.runCmd(cmdScmDeleteGoal); err != nil {
 		return false, err
 	}
-	if out, err := ps.runCmd(cmdScmRemoveRegions); err != nil {
-		ps.log.Error(out)
+	if out, err := r.runCmd(cmdScmRemoveRegions); err != nil {
+		r.log.Error(out)
 		return false, err
 	}
 
 	return true, nil // memory allocation reset requires a reboot
 }
 
-func (ps *prepScm) removeNamespace(devName string) (err error) {
-	ps.log.Infof("removing SCM namespace, may take a few minutes...\n")
+func (r *ipmCtlRunner) removeNamespace(devName string) (err error) {
+	r.log.Infof("removing SCM namespace, may take a few minutes...\n")
 
-	_, err = ps.runCmd(fmt.Sprintf(cmdScmDisableNamespace, devName))
+	_, err = r.runCmd(fmt.Sprintf(cmdScmDisableNamespace, devName))
 	if err != nil {
 		return
 	}
 
-	_, err = ps.runCmd(fmt.Sprintf(cmdScmDestroyNamespace, devName))
+	_, err = r.runCmd(fmt.Sprintf(cmdScmDestroyNamespace, devName))
 	if err != nil {
 		return
 	}
@@ -299,36 +276,25 @@ func hasFreeCapacity(text string) (hasCapacity bool, err error) {
 	return
 }
 
-func parsePmemDevs(jsonData string) (devs []scm.Namespace, err error) {
-	// turn single entries into arrays
-	if !strings.HasPrefix(jsonData, "[") {
-		jsonData = "[" + jsonData + "]"
-	}
-
-	err = json.Unmarshal([]byte(jsonData), &devs)
-
-	return
-}
-
 // createNamespaces runs create until no free capacity.
-func (ps *prepScm) createNamespaces() ([]scm.Namespace, error) {
-	devs := make([]scm.Namespace, 0)
+func (r *ipmCtlRunner) createNamespaces() ([]Namespace, error) {
+	devs := make([]Namespace, 0)
 
 	for {
-		ps.log.Infof("creating SCM namespace, may take a few minutes...\n")
+		r.log.Infof("creating SCM namespace, may take a few minutes...\n")
 
-		out, err := ps.runCmd(cmdScmCreateNamespace)
+		out, err := r.runCmd(cmdScmCreateNamespace)
 		if err != nil {
 			return nil, errors.WithMessage(err, "create namespace cmd")
 		}
 
-		newDevs, err := parsePmemDevs(out)
+		newDevs, err := parseNamespaces(out)
 		if err != nil {
 			return nil, errors.WithMessage(err, "parsing pmem devs")
 		}
 		devs = append(devs, newDevs...)
 
-		state, err := ps.GetState()
+		state, err := r.GetState()
 		if err != nil {
 			return nil, errors.WithMessage(err, "getting state")
 		}
@@ -344,15 +310,40 @@ func (ps *prepScm) createNamespaces() ([]scm.Namespace, error) {
 	}
 }
 
-func (ps prepScm) GetNamespaces() (devs []scm.Namespace, err error) {
-	if err := ps.checkNdctl(); err != nil {
-		return nil, err
-	}
-
-	out, err := ps.runCmd(cmdScmListNamespaces)
+func (r *ipmCtlRunner) GetNamespaces() ([]Namespace, error) {
+	out, err := r.runCmd(cmdScmListNamespaces)
 	if err != nil {
 		return nil, err
 	}
 
-	return parsePmemDevs(out)
+	nss, err := parseNamespaces(out)
+	if err != nil {
+		return nil, err
+	}
+
+	r.log.Debugf("discovered %d DCPM namespaces", len(nss))
+	return nss, nil
+}
+
+func parseNamespaces(jsonData string) (nss []Namespace, err error) {
+	// turn single entries into arrays
+	if !strings.HasPrefix(jsonData, "[") {
+		jsonData = "[" + jsonData + "]"
+	}
+
+	err = json.Unmarshal([]byte(jsonData), &nss)
+
+	return
+}
+
+func defaultIpmCtlRunner(log logging.Logger) *ipmCtlRunner {
+	return newIpmCtlRunner(log, &ipmctl.NvmMgmt{}, run)
+}
+
+func newIpmCtlRunner(log logging.Logger, lib ipmctl.IpmCtl, runCmd runCmdFn) *ipmCtlRunner {
+	return &ipmCtlRunner{
+		log:     log,
+		binding: lib,
+		runCmd:  runCmd,
+	}
 }

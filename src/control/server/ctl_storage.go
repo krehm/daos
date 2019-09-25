@@ -32,6 +32,7 @@ import (
 	"github.com/daos-stack/daos/src/control/drpc"
 	"github.com/daos-stack/daos/src/control/logging"
 	"github.com/daos-stack/daos/src/control/server/ioserver"
+	"github.com/daos-stack/daos/src/control/server/storage/scm"
 )
 
 // StorageControlService encapsulates the storage part of the control service
@@ -195,7 +196,7 @@ func (c *StorageControlService) GetScmState() (types.ScmState, error) {
 //
 // Suitable for commands invoked directly on server, not over gRPC.
 func (c *StorageControlService) PrepareScm(req PrepareScmRequest, state types.ScmState,
-) (needsReboot bool, pmemDevs []pmemDev, err error) {
+) (needsReboot bool, pmemDevs []scm.Namespace, err error) {
 
 	if req.Reset {
 		// run reset to remove namespaces and clear regions

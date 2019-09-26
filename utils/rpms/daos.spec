@@ -14,8 +14,13 @@ Source0:       %{name}-%{version}.tar.gz
 Source1:       scons_local-%{version}.tar.gz
 
 BuildRequires: scons
+BuildRequires: gcc-c++
 BuildRequires: cart-devel
+%if (0%{?rhel} >= 7)
 BuildRequires: argobots-devel >= 1.0rc1
+%else
+BuildRequires: libabt-devel >= 1.0rc1
+%endif
 BuildRequires: libpmem-devel, libpmemobj-devel
 BuildRequires: fuse-devel >= 3.4.2
 BuildRequires: protobuf-c-devel
@@ -49,6 +54,13 @@ BuildRequires: cunit-devel
 BuildRequires: go1.10
 BuildRequires: ipmctl-devel
 BuildRequires: python-devel python3-devel
+%if 0%{?is_opensuse}
+#have choice for boost-devel needed by cart-devel: boost-devel boost_1_58_0-devel
+BuildRequires: boost-devel
+#have choice for libpmemblk.so.1(LIBPMEMBLK_1.0)(64bit) needed by fio: libpmemblk libpmemblk1
+#have choice for libpmemblk.so.1()(64bit) needed by fio: libpmemblk libpmemblk1
+BuildRequires: libpmemblk1
+%endif
 %endif
 %endif
 Requires: libpmem, libpmemobj
@@ -57,6 +69,8 @@ Requires: protobuf-c
 Requires: spdk
 Requires: fio < 3.4
 Requires: openssl
+
+
 
 %description
 The Distributed Asynchronous Object Storage (DAOS) is an open-source

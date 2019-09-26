@@ -222,6 +222,7 @@ install -m 644 utils/systemd/daos-agent.service %{?buildroot}/%{_unitdir}
 %{_libdir}/daos_srv/libsecurity.so
 %{_libdir}/daos_srv/libvos_srv.so
 %{_datadir}/%{name}
+%exclude %{_datadir}/%{name}/ioil-ld-opts
 %{_unitdir}/daos-server.service
 
 %files client

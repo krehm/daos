@@ -191,12 +191,15 @@ install -m 644 utils/systemd/daos-agent.service %{?buildroot}/%{_unitdir}
 %{_bindir}/rdbt
 %{_bindir}/vos_size.py
 %{_libdir}/libvos.so
+%dir %{_prefix}%{_sysconfdir}
 %{_prefix}%{_sysconfdir}/vos_dfs_sample.yaml
 %{_prefix}%{_sysconfdir}/vos_size_input.yaml
+%dir %{_libdir}
 %{_libdir}/libdaos_common.so
 # TODO: this should move to %{_libdir}/daos/libplacement.so
 %{_libdir}/daos_srv/libplacement.so
 # Certificate generation files
+%dir %{daoshome}
 %{daoshome}/certgen/
 %{daoshome}/VERSION
 %doc
@@ -206,6 +209,7 @@ install -m 644 utils/systemd/daos-agent.service %{?buildroot}/%{_unitdir}
 %{_sysconfdir}/ld.so.conf.d/daos.conf
 %{_bindir}/daos_server
 %{_bindir}/daos_io_server
+%dir %{_libdir}a/daos_srv
 %{_libdir}/daos_srv/libcont.so
 %{_libdir}/daos_srv/libdtx.so
 %{_libdir}/daos_srv/libmgmt.so
@@ -236,6 +240,7 @@ install -m 644 utils/systemd/daos-agent.service %{?buildroot}/%{_unitdir}
 %{_libdir}/libdfuse.so
 %{_libdir}/libioil.so
 %{_libdir}/python2.7/site-packages/pydaos_shim_27.so
+%dir %{_libdir}/python3/site-packages
 %{_libdir}/python3/site-packages/pydaos_shim_3.so
 %{_datadir}/%{name}/ioil-ld-opts
 %{_prefix}%{_sysconfdir}/daos.yml

@@ -1198,9 +1198,9 @@ pipeline {
                                                test_tag=pr,hw
                                            fi
                                            tnodes=$(echo $NODELIST | cut -d ',' -f 1-9)
-                                           sed -i -e 's/ofi+sockets/ofi+psm2/'                                                    \
-                                                  -e 's/\(fabric_iface: *\)[^ ]*\( *.*\)/\1ib0\2/'                                \
-                                                  -e '/FI_SOCKETS_CONN_TIMEOUT=/a\ \ - FI_PSM2_DISCONNECT=1\n  - PSM2_MULTI_EP=1' \
+                                           sed -i -e 's/ofi+sockets/ofi+psm2/'                                                       \
+                                                  -e 's/\\(fabric_iface: *\\)[^ ]*\\( *.*\\)/\\1ib0\\2/'                             \
+                                                  -e '/FI_SOCKETS_CONN_TIMEOUT=/a\\ \\ - FI_PSM2_DISCONNECT=1\\n  - PSM2_MULTI_EP=1' \
                                                      src/tests/ftest/data/daos_server_baseline.yaml
                                            cat src/tests/ftest/data/daos_server_baseline.yaml
                                            ./ftest.sh "$test_tag" $tnodes''',

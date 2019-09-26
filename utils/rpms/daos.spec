@@ -254,8 +254,6 @@ install -m 644 utils/systemd/daos-agent.service %{?buildroot}/%{_unitdir}
 %{daoshome}/TESTING
 %{_bindir}/hello_drpc
 %{_bindir}/*_test*
-%{_bindir}/io_conf/daos_io_conf_1
-%{_bindir}/io_conf/daos_io_conf_2
 %{_bindir}/smd_ut
 %{_bindir}/vea_ut
 %{_bindir}/daosbench

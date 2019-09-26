@@ -178,7 +178,7 @@ $(DEB_TARBASE).orig.tar.$(SRC_EXT) : $(DEB_BUILD).tar.$(SRC_EXT)
 	rm -f $(DEB_TOP)/*.orig.tar.*
 	ln -f $< $@
 
-$(DEB_TOP)/.detar: $(notdir $(SOURCE)) $(DEB_TARBASE).orig.tar.$(SRC_EXT) 
+$(DEB_TOP)/.detar: $(notdir $(SOURCE)) $(DEB_TARBASE).orig.tar.$(SRC_EXT)
 	# Unpack tarball
 	rm -rf ./$(DEB_BUILD)/*
 	mkdir -p $(DEB_BUILD)

@@ -49,20 +49,31 @@ BuildRequires: libipmctl-devel
 BuildRequires: python-devel python36-devel
 %else
 %if (0%{?suse_version} >= 1315)
+# see src/client/dfs/SConscript for why we need /etc/os-release
+# that code should be rewritten to use the python libraries provided for
+# os detection
+BuildRequires: distribution-release
 BuildRequires: libnuma-devel
 BuildRequires: cunit-devel
 BuildRequires: go1.10
 BuildRequires: ipmctl-devel
 BuildRequires: python-devel python3-devel
 %if 0%{?is_opensuse}
-#have choice for boost-devel needed by cart-devel: boost-devel boost_1_58_0-devel
+# have choice for boost-devel needed by cart-devel: boost-devel boost_1_58_0-devel
 BuildRequires: boost-devel
-#have choice for libpmemblk.so.1(LIBPMEMBLK_1.0)(64bit) needed by fio: libpmemblk libpmemblk1
-#have choice for libpmemblk.so.1()(64bit) needed by fio: libpmemblk libpmemblk1
+%else
+# have choice for libcurl.so.4()(64bit) needed by systemd: libcurl4 libcurl4-mini
+# have choice for libcurl.so.4()(64bit) needed by cmake: libcurl4 libcurl4-mini
+BuildRequires: libcurl4
+# have choice for libpsm_infinipath.so.1()(64bit) needed by libfabric1: libpsm2-compat libpsm_infinipath1
+# have choice for libpsm_infinipath.so.1()(64bit) needed by openmpi-libs: libpsm2-compat libpsm_infinipath1
+BuildRequires: libpsm_infinipath1
+%endif # 0%{?is_opensuse}
+# have choice for libpmemblk.so.1(LIBPMEMBLK_1.0)(64bit) needed by fio: libpmemblk libpmemblk1
+# have choice for libpmemblk.so.1()(64bit) needed by fio: libpmemblk libpmemblk1
 BuildRequires: libpmemblk1
-%endif
-%endif
-%endif
+%endif # (0%{?suse_version} >= 1315)
+%endif # (0%{?rhel} >= 7)
 Requires: libpmem, libpmemobj
 Requires: fuse >= 3.4.2
 Requires: protobuf-c

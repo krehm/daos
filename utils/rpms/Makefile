@@ -8,7 +8,7 @@ sle12_PR_REPOS := scons
 sl42_PR_REPOS  := scons
 PR_REPOS       := openpa libfabric pmix ompi@PR-7 mercury spdk isa-l fio dpdk \
 	          protobuf-c fuse pmdk argobots raft cart@daos_devel1
-els_REPOS      := https://copr-be.cloud.fedoraproject.org/results/jhli/ipmctl/epel-7-x86_64/   \
+el7_REPOS      := https://copr-be.cloud.fedoraproject.org/results/jhli/ipmctl/epel-7-x86_64/   \
 	          https://copr-be.cloud.fedoraproject.org/results/jhli/safeclib/epel-7-x86_64/
 sl42_REPOS     := https://download.opensuse.org/repositories/science:/HPC/openSUSE_Leap_42.3/        \
 	          http://download.opensuse.org/repositories/devel:/languages:/go/openSUSE_Leap_42.3/ \

@@ -240,6 +240,7 @@ install -m 644 utils/systemd/daos-agent.service %{?buildroot}/%{_unitdir}
 %{_libdir}/libdfuse.so
 %{_libdir}/libioil.so
 %{_libdir}/python2.7/site-packages/pydaos_shim_27.so
+%dir %{_libdir}/python3
 %dir %{_libdir}/python3/site-packages
 %{_libdir}/python3/site-packages/pydaos_shim_3.so
 %{_datadir}/%{name}/ioil-ld-opts
@@ -248,6 +249,7 @@ install -m 644 utils/systemd/daos-agent.service %{?buildroot}/%{_unitdir}
 %{_unitdir}/daos-agent.service
 
 %files tests
+%dir %{daoshome}/utils
 %{daoshome}/utils/py
 %{daoshome}/TESTING
 %{_bindir}/hello_drpc

@@ -43,9 +43,12 @@
 def arch = ""
 def sanitized_JOB_NAME = JOB_NAME.toLowerCase().replaceAll('/', '-').replaceAll('%2f', '-')
 
-def component_repos = "openpa libpsm2@PR-1 libfabric@PR-16 pmix ompi@PR-7 mercury spdk isa-l fio dpdk protobuf-c fuse pmdk argobots raft cart@PR-216"
+def el7_component_repos = "libpsm2@PR-1"
+def sle12_component_repos = ""
+def component_repos = "openpa libfabric@PR-16 pmix ompi@PR-7 mercury spdk isa-l fio dpdk protobuf-c fuse pmdk argobots raft cart@PR-216"
 def daos_repo = "daos@${env.BRANCH_NAME}:${env.BUILD_NUMBER}"
-def daos_repos = component_repos + ' ' + daos_repo
+def el7_daos_repos = el7_component_repos + ' ' + component_repos + ' ' + daos_repo
+def sle12_daos_repos = sle12_component_repos + ' ' + component_repos + ' ' + daos_repo
 def ior_repos = "mpich@daos_adio-rpm ior-hpc@daos"
 
 def rpm_test_pre = '''if git show -s --format=%B | grep "^Skip-test: true"; then
@@ -1002,7 +1005,7 @@ pipeline {
                         provisionNodes NODELIST: env.NODELIST,
                                        node_count: 1,
                                        snapshot: true,
-                                       inst_repos: component_repos,
+                                       inst_repos: el7_component_repos,
                                        inst_rpms: "argobots cart fuse3-libs hwloc-devel libisa-l libpmem libpmemobj protobuf-c spdk-devel"
                         runTest stashes: [ 'CentOS-tests', 'CentOS-install', 'CentOS-build-vars' ],
                                 script: '''# JENKINS-52781 tar function is breaking symlinks
@@ -1115,7 +1118,7 @@ pipeline {
                         provisionNodes NODELIST: env.NODELIST,
                                        node_count: 9,
                                        snapshot: true,
-                                       inst_repos: daos_repos + ' ' + ior_repos,
+                                       inst_repos: el7_daos_repos + ' ' + ior_repos,
                                        inst_rpms: "ior-hpc mpich-autoload"
                         runTest stashes: [ 'CentOS-install', 'CentOS-build-vars' ],
                                 script: '''test_tag=$(git show -s --format=%B | sed -ne "/^Test-tag:/s/^.*: *//p")
@@ -1181,13 +1184,13 @@ pipeline {
                         provisionNodes NODELIST: env.NODELIST,
                                        node_count: 1,
                                        snapshot: true,
-                                       inst_repos: daos_repos + ' ' + ior_repos,
+                                       inst_repos: el7_daos_repos + ' ' + ior_repos,
                                        inst_rpms: "ior-hpc mpich-autoload"
                         // Then just reboot the physical nodes
                         provisionNodes NODELIST: env.NODELIST,
                                        node_count: 9,
                                        power_only: true,
-                                       inst_repos: daos_repos + ' ' + ior_repos,
+                                       inst_repos: el7_daos_repos + ' ' + ior_repos,
                                        inst_rpms: "ior-hpc mpich-autoload"
                         runTest stashes: [ 'CentOS-install', 'CentOS-build-vars' ],
                                 script: '''test_tag=$(git show -s --format=%B | sed -ne "/^Test-tag-hw:/s/^.*: *//p")
@@ -1261,7 +1264,7 @@ pipeline {
                                        distro: 'el7.6',
                                        node_count: 1,
                                        snapshot: true,
-                                       inst_repos: daos_repos + ' ' + ior_repos,
+                                       inst_repos: el7_daos_repos + ' ' + ior_repos,
                                        inst_rpms: "ior-hpc mpich-autoload"
                         catchError(stageResult: 'UNSTABLE', buildResult: 'SUCCESS') {
                             runTest script: "${rpm_test_pre}" +
@@ -1292,7 +1295,7 @@ pipeline {
                                        distro: 'sles12sp3',
                                        node_count: 1,
                                        snapshot: true,
-                                       inst_repos: daos_repos + " python-pathlib"
+                                       inst_repos: sle12_daos_repos + " python-pathlib"
                         catchError(stageResult: 'UNSTABLE', buildResult: 'SUCCESS') {
                             runTest script: "${rpm_test_pre}" +
                                          '''sudo zypper --non-interactive ar -f https://download.opensuse.org/repositories/science:/HPC:/SLE12SP3_Missing/SLE_12_SP3/ hwloc

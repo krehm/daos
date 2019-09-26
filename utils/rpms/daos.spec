@@ -209,7 +209,7 @@ install -m 644 utils/systemd/daos-agent.service %{?buildroot}/%{_unitdir}
 %{_sysconfdir}/ld.so.conf.d/daos.conf
 %{_bindir}/daos_server
 %{_bindir}/daos_io_server
-%dir %{_libdir}a/daos_srv
+%dir %{_libdir}/daos_srv
 %{_libdir}/daos_srv/libcont.so
 %{_libdir}/daos_srv/libdtx.so
 %{_libdir}/daos_srv/libmgmt.so

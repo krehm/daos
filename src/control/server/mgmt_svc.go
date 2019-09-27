@@ -298,6 +298,11 @@ func (svc *mgmtSvc) PoolDestroy(ctx context.Context, req *mgmtpb.PoolDestroyReq)
 	return resp, nil
 }
 
+// TODO KJ
+func (svc *mgmtSvc) PoolGetACL(ctx context.Context, req *mgmtpb.GetACLReq) (*mgmtpb.GetACLResp, error) {
+	return nil, nil
+}
+
 // BioHealthQuery implements the method defined for the Management Service.
 func (svc *mgmtSvc) BioHealthQuery(ctx context.Context, req *mgmtpb.BioHealthReq) (*mgmtpb.BioHealthResp, error) {
 	mi, err := svc.harness.GetManagementInstance()

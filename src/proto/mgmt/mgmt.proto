@@ -31,6 +31,9 @@ import "srv.proto";
 // For storage query commands for BIO data and SMD device list
 import "storage_query.proto";
 
+// For ACL related requests
+import "acl.proto";
+
 // Management Service is replicated on a small number of servers in the system.
 service MgmtSvc {
 	// Join the server described by JoinReq to the system.
@@ -39,6 +42,8 @@ service MgmtSvc {
 	rpc PoolCreate(PoolCreateReq) returns (PoolCreateResp) {}
 	// Destroy a DAOS pool allocated across a number of ranks
 	rpc PoolDestroy(PoolDestroyReq) returns (PoolDestroyResp) {}
+	// Fetch a DAOS pool's Access Control List
+	rpc PoolGetACL(GetACLReq) returns (GetACLResp) {}
 	// Get the information required by libdaos to attach to the system.
 	rpc GetAttachInfo(GetAttachInfoReq) returns (GetAttachInfoResp) {}
 	// Get BIO device health information
